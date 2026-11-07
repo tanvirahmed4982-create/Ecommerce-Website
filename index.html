@@ -295,6 +295,7 @@ ul.rules li::before{content:"";width:8px;height:8px;margin-top:9px;background:va
 .vp-track i{position:absolute;top:-2px;width:2px;height:12px;background:rgba(255,255,255,.45);border-radius:1px}
 .vp-fill{position:absolute;left:0;top:0;bottom:0;background:#4b8dff;border-radius:99px}
 .vp-time{font-size:.78rem;color:#b9c7e2;white-space:nowrap}
+.vp-warn{background:#3a2a07;color:#ffe1a1;font-size:.88rem;padding:8px 14px;line-height:1.4}
 .vp-opts{display:flex;flex-wrap:wrap;gap:8px;padding:4px 12px 12px;align-items:center}
 .vp-seg{display:inline-flex;background:rgba(255,255,255,.08);border-radius:10px;padding:3px;gap:2px;flex-wrap:wrap}
 .vp-seg button{border:0;background:transparent;color:#cfdcf5;font:700 .82rem var(--f-display);padding:6px 11px;border-radius:8px;cursor:pointer;min-height:34px}
@@ -1067,13 +1068,25 @@ A.tts=HAS_TTS;A.voiceState=V;
 A.voiceList=function(){return voices().filter(function(v){return /^en/i.test(v.lang);});};
 A.setVoice=function(name){V.name=name||null;V.voice=null;pickVoice();saveV();};
 A.setVoiceOn=function(on){V.on=!!on;saveV();if(!on)A.hush();};
-A.say=function(text,o){o=o||{};var done=false;function fin(){if(done)return;done=true;if(o.onend)o.onend();}
- if(!HAS_TTS){fin();return false;}
- try{speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(text);var bn=/[ঀ-৿]/.test(text);
-  if(bn){var b=voices().filter(function(v){return /^bn/i.test(v.lang);})[0];if(b)u.voice=b;u.lang='bn-BD';}else{if(!V.voice)pickVoice();if(V.voice){u.voice=V.voice;u.lang=V.voice.lang;}else u.lang='en-GB';}
-  u.rate=o.rate||V.rate;u.pitch=1;u.onend=fin;u.onerror=fin;speechSynthesis.speak(u);
-  setTimeout(fin,1800+text.length*85/u.rate);return true;}catch(e){fin();return false;}};
-A.hush=function(){if(HAS_TTS)try{speechSynthesis.cancel();}catch(e){}};
+var CUR=null;A.voiceErr=null;A.voiceOK=false;
+function speakNow(u){try{if(speechSynthesis.paused)speechSynthesis.resume();speechSynthesis.speak(u);}catch(e){}}
+A.say=function(text,o){o=o||{};var done=false,started=false;function fin(){if(done)return;done=true;if(o.onend)o.onend();}
+ if(!HAS_TTS){A.voiceErr='unsupported';fin();if(o.onfail)o.onfail('unsupported');return false;}
+ try{var u=new SpeechSynthesisUtterance(text);var bn=/[ঀ-৿]/.test(text);
+  if(bn){var b=voices().filter(function(v){return /^bn/i.test(v.lang);})[0];if(b)u.voice=b;u.lang='bn-BD';}
+  else{if(!V.voice)pickVoice();if(V.voice){u.voice=V.voice;u.lang=V.voice.lang;}else u.lang='en-GB';}
+  u.rate=o.rate||V.rate;u.pitch=1;u.volume=1;
+  u.onstart=function(){started=true;A.voiceOK=true;A.voiceErr=null;};
+  u.onend=fin;
+  u.onerror=function(ev){var er=ev&&ev.error;if(er&&er!=='interrupted'&&er!=='canceled'){A.voiceErr=er;if(o.onfail)o.onfail(er);}fin();};
+  CUR=u;/* keep a reference: some browsers drop events for garbage-collected utterances */
+  var busy=false;try{busy=speechSynthesis.speaking||speechSynthesis.pending;}catch(e){}
+  if(busy)try{speechSynthesis.cancel();}catch(e){}
+  if(busy&&!o.now)setTimeout(function(){if(!done)speakNow(u);},80);else speakNow(u);
+  setTimeout(function(){if(!started&&!done){if(!A.voiceOK){A.voiceErr=A.voiceErr||'no-start';if(o.onfail)o.onfail('no-start');}fin();}},o.now?3000:3500);
+  setTimeout(fin,3000+text.length*95/u.rate);return true;}catch(e){fin();return false;}};
+A.hush=function(){if(HAS_TTS)try{if(speechSynthesis.speaking||speechSynthesis.pending)speechSynthesis.cancel();}catch(e){}};
+A.testVoice=function(text){A.hush();return A.say(text||'Hello. This is your DriveWise narrator. Mirrors, signal, manoeuvre.',{now:true});};
 
 /* ---------- 3D renderer (Three.js) ---------- */
 function Three3D(stage){var T=window.THREE;if(!T)return null;var r;
@@ -1144,7 +1157,7 @@ A.player=function(host,id,opt){opt=opt||{};var sc=S[id];if(!sc){host.innerHTML='
  var st=JSON.parse(JSON.stringify(sc.state||{}));if(opt.state)for(var k in opt.state)st[k]=opt.state[k];var caps=sc.caps||[];
  var VIEWS3=[['top','Top'],['3d','3D'],['chase','Chase'],['driver','Driver']],can3=!!window.THREE;
  host.classList.add('vp');
- host.innerHTML='<div class="vp-stage"><canvas class="vp-2d" aria-label="'+sc.t+' animation" role="img"></canvas><button class="vp-big" aria-label="Play with voice">'+IC.play+'<span>Play'+(HAS_TTS?' with voice':'')+'</span></button><span class="vp-badge" hidden></span></div><div class="vp-sub" aria-live="polite"></div>'+
+ host.innerHTML='<div class="vp-stage"><canvas class="vp-2d" aria-label="'+sc.t+' animation" role="img"></canvas><button class="vp-big" aria-label="Play with voice">'+IC.play+'<span>Play'+(HAS_TTS?' with voice':'')+'</span></button><span class="vp-badge" hidden></span></div><div class="vp-sub" aria-live="polite"></div><div class="vp-warn" role="status"'+(HAS_TTS?' hidden':'')+'>'+(HAS_TTS?'':'Voice narration is not available in this browser. Subtitles show every step.')+'</div>'+
   '<div class="vp-bar"><button class="vp-btn vp-pp" aria-label="Play">'+IC.play+'</button><div class="vp-track" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="'+sc.dur+'"><div class="vp-fill"></div>'+caps.map(function(cp){return '<i style="left:'+(100*cp[0]/sc.dur)+'%"></i>';}).join('')+'</div><span class="vp-time num">0:00 / '+fmtT(sc.dur)+'</span>'+(HAS_TTS?'<button class="vp-btn vp-vo" aria-label="Voice on" aria-pressed="true">'+IC.vol+'</button>':'')+'<button class="vp-btn vp-cc" aria-pressed="true" aria-label="Subtitles">CC</button></div>'+
   '<div class="vp-opts">'+(can3?'<span class="vp-seg" role="group" aria-label="Camera angle">'+VIEWS3.map(function(v){return '<button data-v="'+v[0]+'"'+(v[0]==='top'?' class="on" aria-pressed="true"':' aria-pressed="false"')+'>'+v[1]+'</button>';}).join('')+'</span>':'')+'<button class="vp-chip vp-sp">Speed 1×</button>'+
   (sc.controls==='stopping'?'<span class="vp-seg vp-mph" role="group" aria-label="Speed in mph">'+[20,30,40,50,60,70].map(function(m){return '<button data-mph="'+m+'"'+(m===st.mph?' class="on"':'')+'>'+m+'</button>';}).join('')+'</span><button class="vp-chip vp-wet'+(st.wet?' on':'')+'">Wet road</button>':'')+'</div>';
@@ -1154,9 +1167,10 @@ A.player=function(host,id,opt){opt=opt||{};var sc=S[id];if(!sc){host.innerHTML='
  function size(){var w=stage.clientWidth||360,h=Math.round(w*0.75),d=window.devicePixelRatio||1;cv.width=Math.round(w*d);cv.height=Math.round(h*d);cv.style.height=h+'px';if(me.g3)me.g3.size(w,h);}
  size();
  function capIdx(t){for(var i=0;i<caps.length;i++){if(t>=caps[i][0]&&t<caps[i][1])return i;}return -1;}
- function narrate(i){me.sp=i;var tok=++me.tok;if(V.on&&HAS_TTS&&i>=0){me.speaking=true;A.say(caps[i][2],{onend:function(){if(tok===me.tok)me.speaking=false;}});}else me.speaking=false;}
+ function narrate(i,now){me.sp=i;var tok=++me.tok;if(V.on&&HAS_TTS&&i>=0){me.speaking=true;A.say(caps[i][2],{now:now,onend:function(){if(tok===me.tok)me.speaking=false;},onfail:function(er){if(tok===me.tok)voiceFail(er);}});}else me.speaking=false;}
+ function voiceFail(er){var n=host.querySelector('.vp-warn');if(!n)return;n.hidden=false;n.innerHTML='<strong>No sound?</strong> Turn the volume up and check your phone is not on silent, then press play again. Subtitles keep working.'+(er==='not-allowed'?' (Your browser blocked the voice; tap play again.)':'');}
  function setPP(){var ic=me.playing?IC.pause:(me.ended?IC.replay:IC.play);pp.innerHTML=ic;pp.setAttribute('aria-label',me.playing?'Pause':(me.ended?'Replay':'Play'));big.hidden=me.playing;big.querySelector('span').textContent=me.ended?'Watch again':(me.t>0.05?'Resume':'Play'+(HAS_TTS&&V.on?' with voice':''));big.firstChild.outerHTML=me.ended?IC.replay:IC.play;}
- function play(){PLAYERS.forEach(function(p){if(p!==me&&p.playing)p.pause();});if(me.ended){me.t=0;me.ended=false;}me.playing=true;me.sp=-1;me.last=0;setPP();}
+ function play(){PLAYERS.forEach(function(p){if(p!==me&&p.playing)p.pause();});if(me.ended){me.t=0;me.ended=false;}me.playing=true;me.last=0;var w=host.querySelector('.vp-warn');if(w)w.hidden=true;var ci0=capIdx(me.t);if(V.on&&HAS_TTS&&ci0>=0){narrate(ci0,true);}else me.sp=-1;setPP();}
  function pause(){me.playing=false;me.tok++;me.speaking=false;me.sp=-1;A.hush();setPP();}
  me.pause=pause;
  function seek(t){me.t=Math.max(0,Math.min(sc.dur-0.01,t));me.ended=false;me.tok++;me.speaking=false;me.sp=-1;A.hush();setPP();draw(0);}
@@ -1357,7 +1371,7 @@ var VIEWS={};
 function go(){stopRun();drawer(false);if(!$('#modal').hidden)closeModal();var r=route(),v=$('#view');v.innerHTML='';VIEWS[r.v==='lesson'?'lesson':r.v](v,r);markNav();window.scrollTo(0,0);v.focus({preventScroll:true});}
 window.addEventListener('hashchange',go);
 var runStop=null;function stopRun(){if(runStop){runStop();runStop=null;}A.pauseAll();}
-function speak(text){A.pauseAll();if(!A.tts){toast('Voice narration is not available in this browser');return;}A.say(text);}
+function speak(text){A.pauseAll();if(!A.tts){toast('Voice narration is not available in this browser');return;}A.say(text,{now:true,onfail:function(){toast('No sound? Turn the volume up and switch off silent mode.');}});}
 function plate(n,cls){return '<span class="plate '+(cls||'')+'">'+n+'</span>';}
 function ring(p,size,label){p=Math.max(0,Math.min(100,Math.round(p)));var r=size/2-7,c=2*Math.PI*r;return '<svg class="ring" viewBox="0 0 '+size+' '+size+'" width="'+size+'" height="'+size+'" role="img" aria-label="'+(label||'')+' '+p+'%"><circle cx="'+size/2+'" cy="'+size/2+'" r="'+r+'" class="ring-bg"/><circle cx="'+size/2+'" cy="'+size/2+'" r="'+r+'" class="ring-fg" stroke-dasharray="'+(c*p/100)+' '+c+'" transform="rotate(-90 '+size/2+' '+size/2+')"/><text x="50%" y="52%" text-anchor="middle" dominant-baseline="middle">'+p+'%</text></svg>';}
 
@@ -1437,7 +1451,7 @@ VIEWS.lesson=function(v,r){var c=CH[r.id];if(!c){location.hash='#learn';return;}
  '<ol class="stepper" role="tablist">'+steps.map(function(s,i){return '<li><button role="tab" data-st="'+i+'" aria-selected="'+(i===0)+'"><span class="st-n">'+(i+1)+'</span><span>'+s[1]+'</span></button></li>';}).join('')+'</ol><div id="stp"></div>';
  function show(i){cur=i;A.pauseAll();$$('.stepper button',v).forEach(function(b,j){b.setAttribute('aria-selected',j===i);b.classList.toggle('done',j<i);});var k=steps[i][0],h=$('#stp');
   var nextBtn=i+1<steps.length?'<button class="btn st-next" id="stn">Next: '+steps[i+1][1]+' →</button>':'';
-  if(k==='watch'){h.innerHTML='<p class="lede">'+esc(c.intro)+'</p><p class="hint">Press play. A voice explains each step with subtitles. Pause any time; the voice pauses too. Try the <strong>3D</strong>, <strong>Chase</strong> and <strong>Driver</strong> camera angles.</p><div class="anim-list">'+c.anim.map(function(a,j){return '<div class="anim-wrap"><h3>'+esc(A.SCENES[a].t)+'</h3><div id="an'+j+'"></div></div>';}).join('')+'</div>'+nextBtn;c.anim.forEach(function(a,j){A.player($('#an'+j),a);});}
+  if(k==='watch'){h.innerHTML='<p class="lede">'+esc(c.intro)+'</p><p class="hint">Press play. A voice explains each step with subtitles. Pause any time; the voice pauses too. Try the <strong>3D</strong>, <strong>Chase</strong> and <strong>Driver</strong> camera angles.'+(A.tts?' <button class="btn-sm ghost" id="tv">Test sound</button>':'')+'</p><div class="anim-list">'+c.anim.map(function(a,j){return '<div class="anim-wrap"><h3>'+esc(A.SCENES[a].t)+'</h3><div id="an'+j+'"></div></div>';}).join('')+'</div>'+nextBtn;c.anim.forEach(function(a,j){A.player($('#an'+j),a);});var tv=$('#tv');if(tv)tv.onclick=function(){A.pauseAll();A.say('Hello. If you can hear me, voice narration is working.',{now:true,onfail:function(){toast('No sound. Turn the volume up and switch off silent mode.');}});};}
   else if(k==='learn'){h.innerHTML='<div class="row"><button class="btn-sm ghost" id="say">Read the rules aloud</button></div><ol class="rules">'+c.rules.map(function(x){return '<li><span>'+esc(x[0])+'</span><span class="ref">'+esc(x[1])+'</span></li>';}).join('')+'</ol><details class="bn-box"'+(S.lang==='bn'?' open':'')+'><summary>বাংলায় সারাংশ (Bangla summary)</summary><p lang="bn">'+c.bnSum+'</p><button class="btn-sm ghost" id="saybn">পড়ে শোনান</button></details><div class="row"><a class="btn-sm ghost" href="#tutor" id="ask">Still confused? Ask the tutor</a></div>'+nextBtn;
    $('#say').onclick=function(){speak(c.t+'. '+c.rules.map(function(x){return x[0];}).join(' '));};$('#saybn').onclick=function(){speak(c.bnSum);};$('#ask').onclick=function(){tutorSeed='Explain '+c.t.toLowerCase()+' to me simply';};}
   else{h.innerHTML='<section class="card"><h2>Knowledge check</h2><p class="small muted">Get 2 of 3 right to complete this chapter.</p><div id="kc"></div></section><div id="kdone"></div>';
@@ -1594,7 +1608,7 @@ VIEWS.progress=function(v){var p=pct(),w=weakList(),mocks=S.mocks.filter(functio
  '<section class="sec"><h2>Badges</h2><div class="badges">'+BADGES.map(function(b){var on=S.badges[b[0]];return '<div class="badge'+(on?' on':'')+'"><span class="badge-ic">'+(on?'★':'☆')+'</span><strong>'+b[1]+'</strong><span class="small muted">'+b[2]+'</span></div>';}).join('')+'</div></section>'+
  '<section class="sec"><h2>Module certificates</h2><div class="certs">'+D.CHAPTERS.map(function(c){var d=S.lessons[c.id];return '<div class="cert'+(d?' on':'')+'">'+plate(c.n,'sm')+'<span>'+esc(c.t)+'</span><span class="small muted">'+(d?'Completed '+d:'Not yet')+'</span></div>';}).join('')+'</div></section>'+
  (A.tts?'<section class="sec card"><h2>Narrator voice</h2><p class="small muted">Choose the voice that reads lesson videos. Voices come from your device; the most natural British voice is picked automatically.</p><div class="row"><select id="vsel" aria-label="Narrator voice"><option value="">Automatic (best British voice)</option>'+A.voiceList().map(function(vv){return '<option value="'+esc(vv.name)+'"'+(A.voiceState.name===vv.name?' selected':'')+'>'+esc(vv.name)+' ('+vv.lang+')</option>';}).join('')+'</select><button class="btn-sm ghost" id="vtest">Test voice</button></div></section>':'')+'<section class="sec card"><h2>Your details</h2><label for="nm">Name shown on your dashboard</label><div class="row"><input id="nm" value="'+esc(S.name)+'" maxlength="30" autocomplete="given-name"><button class="btn-sm" id="nms">Save</button></div><p class="small muted">Progress is saved in this browser on this device.</p><button class="btn-sm ghost danger" id="rst">Reset all progress</button><div id="rcf"></div></section>';
- var vs=$('#vsel');if(vs){vs.onchange=function(){A.setVoice(vs.value);};$('#vtest').onclick=function(){A.say('At the roundabout, give way to traffic from your right.');};}var wk=$('#wk');if(wk)wk.onclick=function(){startTest('weak');};$('#nms').onclick=function(){S.name=$('#nm').value.trim();save();toast('Saved');};
+ var vs=$('#vsel');if(vs){vs.onchange=function(){A.setVoice(vs.value);};$('#vtest').onclick=function(){A.testVoice('At the roundabout, give way to traffic from your right.');};}var wk=$('#wk');if(wk)wk.onclick=function(){startTest('weak');};$('#nms').onclick=function(){S.name=$('#nm').value.trim();save();toast('Saved');};
  $('#rst').onclick=function(){$('#rcf').innerHTML='<div class="fb-card bad">Delete all progress, scores and badges? <div class="row"><button class="btn-sm danger" id="ry">Delete everything</button><button class="btn-sm ghost" id="rn">Cancel</button></div></div>';$('#ry').onclick=function(){var l=S.lang,th=S.theme;S=blank();S.lang=l;S.theme=th;save();hdr();go();toast('Progress reset');};$('#rn').onclick=function(){$('#rcf').innerHTML='';};};};
 function spark(vals){var W=300,H=90,n=vals.length,x=function(i){return n<2?W/2:10+(W-20)*i/(n-1);},y=function(s){return H-12-(H-24)*s/50;};var d=vals.map(function(s,i){return (i?'L':'M')+x(i)+' '+y(s);}).join(' ');
  return '<div class="spark-wrap"><svg viewBox="0 0 '+W+' '+H+'" class="spark" role="img" aria-label="Mock scores trend"><line x1="0" x2="'+W+'" y1="'+y(43)+'" y2="'+y(43)+'" class="pass-line"/><text x="'+(W-4)+'" y="'+(y(43)-4)+'" text-anchor="end" class="tl-t">pass 43</text><path d="'+d+'" class="spark-l"/>'+vals.map(function(s,i){return '<circle cx="'+x(i)+'" cy="'+y(s)+'" r="'+(i===n-1?4.5:2.5)+'" class="spark-d"/>';}).join('')+'<text x="'+x(n-1)+'" y="'+(y(vals[n-1])-9)+'" text-anchor="middle" class="tl-n">'+vals[n-1]+'</text></svg></div>';}
